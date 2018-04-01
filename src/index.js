@@ -57,9 +57,10 @@ function readMigrations(migrationsFolder) {
       }
 
       if (!files) {
-        info(`no migrations found`);
+        info('no migrations found');
 
         resolve(migrations);
+        return;
       }
 
       info(`found [${files.length}] migrations`);
@@ -157,14 +158,39 @@ export default async function (connectionOptions, { folder, logger = console, lo
   };
 
   info('initiating migration');
-  const connection = await mysql.createConnection(connectionOptions);
-  info('connected to db');
 
-  await init(connection);
+  let connection;
+  try {
+    connection = await mysql.createConnection(connectionOptions);
+    info('connected to db');
+  } catch (err) {
+    error(`could not connect to db: ${err.message}`);
+    return;
+  }
 
-  const migrations = await readMigrations(folder);
 
-  await processMigrations(connection, migrations);
+
+  try {
+    await init(connection);
+  } catch (err) {
+    error(`could not create sql migrations table: ${err.message}`);
+    return;
+  }
+
+  let migrations;
+  try {
+    migrations = await readMigrations(folder);
+  } catch (err) {
+    error(`could not read migrations: ${err.message}`);
+    return;
+  }
+
+  try {
+    await processMigrations(connection, migrations);
+  } catch (err) {
+    error(`could not process migrations: ${err.message}`);
+    return;
+  }
 
   await connection.end();
   info('finished migration');
