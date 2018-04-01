@@ -1,6 +1,6 @@
 {
   "name": "mysql-node-migrator",
-  "version": "1.1.9",
+  "version": "1.1.10",
   "description": "A database change management tool for nodejs and mysql",
   "main": "dist/index.js",
   "scripts": {

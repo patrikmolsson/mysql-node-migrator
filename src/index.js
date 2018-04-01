@@ -56,6 +56,12 @@ function readMigrations(migrationsFolder) {
         reject(err);
       }
 
+      if (!files) {
+        info(`no migrations found`);
+
+        resolve(migrations);
+      }
+
       info(`found [${files.length}] migrations`);
 
       for (let i = 0; i < files.length; i += 1) {
