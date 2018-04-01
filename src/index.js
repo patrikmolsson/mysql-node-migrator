@@ -39,7 +39,7 @@ function init(connection) {
   const query = `CREATE TABLE IF NOT EXISTS \`migration_schema\` (
                     \`version\` INT PRIMARY KEY,
                     \`name\` TEXT NOT NULL,
-                    \`date\` DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE = InnoDB`;
+                    \`date\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE = InnoDB`;
 
   return connection.query(query);
 }
