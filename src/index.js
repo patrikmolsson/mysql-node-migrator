@@ -91,12 +91,29 @@ function insertMigrationInformation(connection, migrationScript) {
 }
 
 async function applyMigration(connection, migrationScript) {
-  const content = fs.readFileSync(migrationScript.absolute_path, 'utf8');
+  const queries = fs.readFileSync(migrationScript.absolute_path, 'utf8')
+    .toString()
+    .replace(/--.*(\r\n|\n|\r)/gm, '') // remove lines with comments (in case we got some ';'s)
+    .split(/;(\r\n|\n\r|\r|\n)/gm) // split into all statements (we can probably do this one better)
+    .map(r => r.trim()) // Remove empty statements
+    .filter(r => !!r.length);
 
   try {
     await connection.beginTransaction();
 
-    await connection.query(content);
+    // We want to handle the queries sequentially, and aviod a deep
+    // promise chain, therefore we use the for-in
+    // eslint-disable-next-line no-restricted-syntax
+    for (const queryIndex in queries) {
+      if (Object.prototype.hasOwnProperty.call(queries, queryIndex)) {
+        const query = queries[queryIndex];
+
+        info(`trying to execute query: ${query}`);
+
+        // eslint-disable-next-line no-await-in-loop
+        await connection.query(query);
+      }
+    }
 
     await insertMigrationInformation(connection, migrationScript);
 
@@ -106,7 +123,9 @@ async function applyMigration(connection, migrationScript) {
   } catch (err) {
     error(`cannot execute query. Reason [${err.message}]`);
 
-    connection.rollback();
+    await connection.rollback();
+
+    throw err;
   }
 }
 
@@ -149,6 +168,7 @@ async function processMigrations(connection, migrations) {
  * @param folder
  * @param logger
  * @param logging
+ * @return {Promise} Whether or not the migration was successful
  */
 export default async function (connectionOptions, { folder, logger = console, logging = true }) {
   log = (message, level) => {
@@ -167,7 +187,6 @@ export default async function (connectionOptions, { folder, logger = console, lo
     error(`could not connect to db: ${err.message}`);
     return;
   }
-
 
 
   try {
