@@ -101,18 +101,15 @@ async function applyMigration(connection, migrationScript) {
   try {
     await connection.beginTransaction();
 
-    // We want to handle the queries sequentially, and aviod a deep
-    // promise chain, therefore we use the for-in
-    // eslint-disable-next-line no-restricted-syntax
-    for (const queryIndex in queries) {
-      if (Object.prototype.hasOwnProperty.call(queries, queryIndex)) {
-        const query = queries[queryIndex];
+    // We want to handle the queries sequentially, and avoid a deep
+    // promise chain, therefore we use the for-loop
+    for (let i = 0; i < queries.length; i += 1) {
+      const query = queries[i];
 
-        info(`trying to execute query: ${query}`);
+      info(`trying to execute query: ${query}`);
 
-        // eslint-disable-next-line no-await-in-loop
-        await connection.query(query);
-      }
+      // eslint-disable-next-line no-await-in-loop
+      await connection.query(query);
     }
 
     await insertMigrationInformation(connection, migrationScript);
