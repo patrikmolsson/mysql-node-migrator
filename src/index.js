@@ -1,102 +1,12 @@
-import fs from 'fs';
 import mysql from 'promise-mysql';
+import logger from './logger';
+import FileHelper from './fileHelper';
+import DatabaseHelper from './databaseHelper';
 
-/**
- * parse file name {version, name}
- *
- * @param fileName {string} - file name
- * @param fullPathToFile {string} - absolute file path
- */
-function parseFile(fileName, fullPathToFile) {
-  const matches = /V(\d+)__([\w_]+)\.sql/g.exec(fileName);
-  if (!matches || matches.index < 0) {
-    throw new Error(`file ['${fileName}'] has an invalid file name template`);
-  }
-
-  return {
-    version: parseInt(matches[1], 10),
-    name: matches[2].replace(/_/g, ' '),
-    absolute_path: fullPathToFile,
-  };
-}
-
-let log;
-
-function info(message) {
-  log(message, 'info');
-}
-
-function error(message) {
-  log(message, 'error');
-}
-
-/**
- * create empty migration schema table
- *
- * @param connection {Connection}
- */
-function init(connection) {
-  const query = `CREATE TABLE IF NOT EXISTS \`migration_schema\` (
-                    \`version\` INT PRIMARY KEY,
-                    \`name\` TEXT NOT NULL,
-                    \`date\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE = InnoDB`;
-
-  return connection.query(query);
-}
-
-
-/**
- * @param migrationsFolder {string} - path to migrations folder
- */
-function readMigrations(migrationsFolder) {
-  return new Promise((resolve, reject) => {
-    fs.readdir(`${process.cwd()}/${migrationsFolder}`, (err, files) => {
-      const migrations = [];
-      if (err) {
-        reject(err);
-      }
-
-      if (!files) {
-        info('no migrations found');
-
-        resolve(migrations);
-        return;
-      }
-
-      info(`found [${files.length}] migrations`);
-
-      for (let i = 0; i < files.length; i += 1) {
-        try {
-          const result = parseFile(files[i], `${migrationsFolder}/${files[i]}`);
-
-          migrations.push(result);
-        } catch (e) {
-          error(e.message);
-        }
-      }
-
-      resolve(migrations);
-    });
-  });
-}
-
-
-function insertMigrationInformation(connection, migrationScript) {
-  const toInsert = {
-    version: migrationScript.version,
-    name: migrationScript.name,
-  };
-
-  return connection.query('INSERT INTO migration_schema SET ?', toInsert);
-}
+let Logger;
 
 async function applyMigration(connection, migrationScript) {
-  const queries = fs.readFileSync(migrationScript.absolute_path, 'utf8')
-    .toString()
-    .replace(/--.*(\r\n|\n|\r)/gm, '') // remove lines with comments (in case we got some ';'s)
-    .split(/;(\r\n|\n\r|\r|\n)/gm) // split into all statements (we can probably do this one better)
-    .map(r => r.trim()) // Remove empty statements
-    .filter(r => !!r.length);
+  const queries = FileHelper.readAndParseScript(migrationScript);
 
   try {
     await connection.beginTransaction();
@@ -106,19 +16,19 @@ async function applyMigration(connection, migrationScript) {
     for (let i = 0; i < queries.length; i += 1) {
       const query = queries[i];
 
-      info(`trying to execute query: ${query}`);
+      Logger.info(`trying to execute query: ${query}`);
 
       // eslint-disable-next-line no-await-in-loop
       await connection.query(query);
     }
 
-    await insertMigrationInformation(connection, migrationScript);
+    await DatabaseHelper.insertMigrationInformation(connection, migrationScript);
 
     await connection.commit();
 
-    info(`migration [${migrationScript.version}][${migrationScript.name}] successfully applied`);
+    Logger.info(`migration [${migrationScript.version}][${migrationScript.name}] successfully applied`);
   } catch (err) {
-    error(`cannot execute query. Reason [${err.message}]`);
+    Logger.error(`cannot execute query. Reason [${err.message}]`);
 
     await connection.rollback();
 
@@ -127,87 +37,96 @@ async function applyMigration(connection, migrationScript) {
 }
 
 /**
- * @param connection {Connection} -  to work with database
+ * Sorts the migrations from file system and filters already executed ones.
+ *
+ * @param connection {Connection}
+ * @param migrationsFromFileSystem {string[]}
+ * @return {Promise<object[]>}
  */
-function getExistingMigrations(connection) {
-  return connection.query('SELECT * FROM migration_schema');
+async function getMigrationsToExecute(connection, migrationsFromFileSystem) {
+  const existingMigrations = await DatabaseHelper.getExistingMigrations(connection);
+
+  return migrationsFromFileSystem
+    .sort((a, b) => a.version - b.version)
+    .filter(mScript => !existingMigrations.some(m => m.version === mScript.version));
 }
 
 /**
- * this function executes new migrations
- * if new exists
  *
  * @param connection {Connection} -  to work with database
- * @param migrations {object[]} - all existed migrations data
+ * @param migrationsToExecute {object[]} - all existed migrations data
  */
-async function processMigrations(connection, migrations) {
-  migrations.sort((a, b) => a.version - b.version);
-
-  const existingMigrations = await getExistingMigrations(connection);
-
-  const migrationsToExecute = migrations
-    .filter(mScript => !existingMigrations.some(m => m.version === mScript.version));
-
-  info(`wanting to execute [${migrationsToExecute.length}] migrations`);
-
+function executeMigrations(connection, migrationsToExecute) {
   // Make our forEach async functions synchronous
-  await migrationsToExecute.reduce((promiseChain, migrationScript) =>
+  return migrationsToExecute.reduce((promiseChain, migrationScript) =>
     promiseChain.then(() => applyMigration(connection, migrationScript)), Promise.resolve());
-
-  info('all migrations successfully applied to database');
 }
 
 
+// noinspection JSUnusedGlobalSymbols
 /**
  * parse file name {version, name}
  *
  * @param connectionOptions
- * @param folder
- * @param logger
- * @param logging
+ * @param {Object} options Other options
+ * @param {string} options.folder
+ * @param {function} [options.loggingFunction=console] The logging function to use
+ * @param {boolean} [options.shouldLog=true] If the script shall write logging information
  * @return {Promise} Whether or not the migration was successful
  */
-export default async function (connectionOptions, { folder, logger = console, logging = true }) {
-  log = (message, level) => {
-    if (logging) {
-      logger[level](`[DBMIGRATE] ${message}`);
-    }
-  };
+export default async function (connectionOptions, options) {
+  const { folder, loggingFunction = console, shouldLog = true } = options;
 
-  info('initiating migration');
+  Logger = logger(loggingFunction, shouldLog);
 
   let connection;
   try {
-    connection = await mysql.createConnection(connectionOptions);
-    info('connected to db');
-  } catch (err) {
-    error(`could not connect to db: ${err.message}`);
-    return;
+    Logger.info('initiating migration');
+    try {
+      connection = await mysql.createConnection(connectionOptions);
+      Logger.info('connected to db');
+    } catch (err) {
+      Logger.error(`could not connect to db: ${err.message}`);
+      throw err;
+    }
+
+
+    try {
+      await DatabaseHelper.insertTable(connection);
+    } catch (err) {
+      Logger.error(`could not create sql migrations table: ${err.message}`);
+      throw err;
+    }
+
+    let migrations;
+    try {
+      migrations = await FileHelper.readMigrations(folder, Logger);
+    } catch (err) {
+      Logger.error(`could not read migrations: ${err.message}`);
+      throw err;
+    }
+
+    let migrationsToExecute;
+    try {
+      migrationsToExecute = await getMigrationsToExecute(connection, migrations);
+      Logger.info(`wanting to execute [${migrationsToExecute.length}] migrations`);
+    } catch (err) {
+      Logger.error(`could not filter migrations to execute: ${err.message}`);
+      throw err;
+    }
+
+    try {
+      await executeMigrations(connection, migrationsToExecute);
+      Logger.info('all migrations successfully applied to database');
+    } catch (err) {
+      Logger.error(`could not process migrations: ${err.message}`);
+      throw err;
+    }
+
+    Logger.info('finished migration');
+  } finally {
+    if (connection) {
+      connection.end();
+    }
   }
-
-
-  try {
-    await init(connection);
-  } catch (err) {
-    error(`could not create sql migrations table: ${err.message}`);
-    return;
-  }
-
-  let migrations;
-  try {
-    migrations = await readMigrations(folder);
-  } catch (err) {
-    error(`could not read migrations: ${err.message}`);
-    return;
-  }
-
-  try {
-    await processMigrations(connection, migrations);
-  } catch (err) {
-    error(`could not process migrations: ${err.message}`);
-    return;
-  }
-
-  await connection.end();
-  info('finished migration');
 }
