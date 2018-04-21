@@ -40,8 +40,8 @@ The migrator takes the following parameters: `connectionOptions` and `options`.
 ```javascript
 const options = {
   folder: 'sqlMigrations', // The relative path to the folder where the sql scripts are located
-  logger: console, // (optional, default console) The logger function to use (e.g. winston)
-  logging: true // (optional, default true) Whether the migrator shall log its progress
+  loggingFunction: console, // (optional, default console) The logger function to use (e.g. winston)
+  logging: true, // (optional, default true) Whether the migrator shall log its progress
 }
 ```
 
