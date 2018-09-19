@@ -7,7 +7,7 @@ import fs from 'fs';
  * @param fullPathToFile {string} - absolute file path
  */
 const parseFile = (fileName, fullPathToFile) => {
-  const matches = /V(\d+)__([\w_]+)\.sql/g.exec(fileName);
+  const matches = /^V(\d+)__([\w_]+)\.sql/g.exec(fileName);
   if (!matches || matches.index < 0) {
     throw new Error(`file ['${fileName}'] has an invalid file name template`);
   }
